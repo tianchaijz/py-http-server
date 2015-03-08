@@ -12,19 +12,19 @@ __version__ = "0.1"
 __all__ = ["HTTPRequestHandlerWFM"]
 __author__ = "Jinzheng Zhang"
 __email__ = "tianchaijz@gmail.com"
+__git__ = "https://github.com/tianchaijz/MTHTTPServerWFM"
 
 
 import os
 import sys
-import cgi
 import re
+import cgi
 import json
 import shutil
 import socket
 import urllib
 import hashlib
 import logging
-import platform
 import mimetypes
 import posixpath
 import threading
@@ -39,69 +39,100 @@ except ImportError:
 
 
 # ============================== Config ==============================
-if platform.system() == "Windows":
-    ENCODING = "gbk"
-else:
-    ENCODING = sys.getfilesystemencoding()
+ENC = sys.stdout.encoding
+ENC_MAP = {"cp936": "gbk"}
+CHARSET = ENC_MAP.get(ENC, "utf-8")
 
 reload(sys)
 sys.setdefaultencoding("utf-8")
 
 logging.basicConfig(level=logging.DEBUG)
+
+FILE_NAME = os.path.basename(str(__file__)).split('.')[0]
 # ====================================================================
-
-# =============================== CSS ================================
-HTML_CSS = """
-body {
-    background:  white;
-    color:       black;
-    font-family: Helvetica, Arial, sans-serif;
-}
-h1 { margin: .5em 0 0 0; }
-h2 { margin: .8em 0 .3em 0; }
-h3 { margin: .5em 0 .3em 0; }
-table {
-    font-size: .8em;
-    margin: .5em 0;
-    border-collapse: collapse;
-    border-bottom: 1px #DED solid;
-    width: 100%;
-}
-thead th {
-    font-size: 1em;
-    background: #DED;
-    padding: .1em .3em;
-    border: .2em solid #FFF;
-}
-tbody tr.odd { background: #F5F5F5; }
-tbody th { text-align: left; }
-tbody td { height: 1.2em; text-align: right; }
-"""
-# ====================================================================
-
-
-def decode_args(func):
-    def wrapper(*args):
-        _args = [arg.decode(ENCODING) for arg in args[1:]]
-        return func(args[0], *_args)
-    return wrapper
 
 
 class HTMLStyle(object):
+    CSS = """
+body { background:#FFF; color:#000;
+font-family:Helvetica, Arial, sans-serif; }
+h1 { margin:.5em 0 0; }
+h2 { margin:.8em 0 .3em; }
+h3 { margin:.5em 0 .3em; }
+
+table { font-size:.8em; border-collapse:collapse;
+border-bottom:1px #DED solid; width:100%; margin:.5em 0; }
+
+thead th { font-size:1em; background:#DED;
+border:.2em solid #FFF; padding:.1em .3em; }
+
+tbody tr.odd { background:#F5F5F5; }
+tbody th { text-align:left; }
+tbody td { height:1.2em; text-align:right; }
+"""
+    GETPAGE = """
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <title>Directory listing for {directory}</title>
+    <style>{css}</style>
+  </head>
+<body>
+  <h2>Directory listing for {directory}</h2>
+  <div>
+    <hr>
+    <form enctype="multipart/form-data" method="post">
+      Upload File: <input name="file" type="file"/>
+      <input type="submit" value="Upload"/>
+    </form>
+    <hr>
+  </div>
+  <div>
+    <form action="/delete" method="post">
+      Delete File: <input type="text" name="filename">
+      <input type="submit" value="Submit">
+    </form>
+    <hr>
+  </div>
+  <div>
+    <table>
+      <thead>
+        <tr> <th rowspan="2">NAME</th> <th colspan="2">INFO</th> </tr>
+        <tr> <th>SIZE</th> <th>SHA1SUM</th> </tr>
+      </thead>
+"""
+    POSTPAGE = """
+<!DOCTYPE html>
+  <html>
+  <head> <meta charset="utf-8"/> <title>Result Page</title> </head>
+  <body>
+    <h2>Result:</h2>
+    <hr>
+    <strong>{result}: </strong>
+    {msg}
+    <hr><br><a href="{refer}">Go Back</a>
+  <body>
+</html>
+"""
+    TBODY = """
+<tbody>
+  {tr_class}
+    <th><a href="{linkname}">{displayname}</a></th>
+    <td>{size}</td> <td>{sha1sum}</td>
+  </tr>
+</tbody>
+"""
+
     def __init__(self):
-        self.table_head = """
-        <thead>
-          <tr>
-            <th rowspan="2">NAME</th>
-            <th colspan="2">INFO</th>
-          </tr>
-          <tr>
-            <th>SIZE</th>
-            <th>SHA1SUM</th>
-          </tr>
-        </thead>
-        """
         self.count = 0
+
+    def gen_getpage(self, **kwargs):
+        kwargs["css"] = HTMLStyle.CSS
+        return HTMLStyle.GETPAGE.format(**kwargs)
+
+    def gen_postpage(self, **kwargs):
+        return HTMLStyle.POSTPAGE.format(**kwargs)
 
     def gen_table_body(self, **kwargs):
         self.count = 1 - self.count
@@ -110,28 +141,19 @@ class HTMLStyle(object):
         else:
             tr_class = '<tr>'
         kwargs["tr_class"] = tr_class
-        tbody = """
-          <tbody>
-            {tr_class}
-              <th><a href="{linkname}">{displayname}</th>
-              <td>{size}</td>
-              <td>{sha1sum}</td>
-            </tr>
-          </tbody>
-        """
-        return tbody.format(**kwargs)
+        return HTMLStyle.TBODY.format(**kwargs)
 
 
 class FileInfoHandler(object):
     FILE_LOCK = threading.Lock()
 
     def __init__(self):
-        self.info_file = "__FILE_INFO.json"
+        self.info_file = "__%s.json" % FILE_NAME
         self.lock = threading.Lock()
         try:
             FileInfoHandler.FILE_LOCK.acquire()
             with open(self.info_file, 'rb') as fd:
-                self.info = json.load(fd, encoding=ENCODING)
+                self.info = json.load(fd, encoding=ENC)
         except Exception, e:
             logging.exception(str(e))
         finally:
@@ -161,18 +183,17 @@ class FileInfoHandler(object):
                 "mtime": mtime
             }
         except IOError, e:
-            logging.exception("%s: %s" % (file, str(e)))
+            logging.exception("!!!! %s: %s" % (file, str(e)))
         finally:
             self.lock.release()
         self.flush_info()
 
-    @decode_args
     def get_info(self, file):
         file_info = self.info.get(file, False)
         if file_info:
             file_mtime = os.path.getmtime(file)
             if str(file_mtime) != file_info["mtime"]:
-                logging.debug("update file info - %s" % file)
+                logging.info("---- update file info - %s" % file)
                 self.add_info(file)
             return file_info
         else:
@@ -180,14 +201,13 @@ class FileInfoHandler(object):
                 self.add_info(file)
             return self.dummy_info()
 
-    @decode_args
     def del_info(self, file):
         try:
-            logging.debug("delete file info - %s" % file)
             self.lock.acquire()
             del self.info[file]
+            logging.info("---- delete file info - %s" % file)
         except KeyError:
-            logging.exception("%s not found" % file)
+            logging.exception("!!!! %s not found" % file)
         except ValueError, e:
             logging.exception(str(e))
         finally:
@@ -209,7 +229,7 @@ class FileInfoHandler(object):
             FileInfoHandler.FILE_LOCK.acquire()
             self.lock.acquire()
             with open(self.info_file, 'wb') as fd:
-                json.dump(self.info, fd, encoding=ENCODING)
+                json.dump(self.info, fd, encoding=ENC)
         except Exception, e:
             logging.exception(str(e))
         finally:
@@ -239,18 +259,21 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
 
     """
 
-    server_version = "MHTTPServerWFM" + __version__
+    server_version = "MHTTPServerWFM/" + __version__
 
     WORK_PATH = os.getcwd()
+    FIH = FileInfoHandler()
+    HS = HTMLStyle()
 
     def __init__(self, *args, **kwargs):
-        logging.debug("__init__ MHTTPServerWFM")
-        self.fih = FileInfoHandler()
+        logging.debug(">>>> __init__ %s" % (self.__class__.__name__))
+        self.fih = HTTPRequestHandlerWFM.FIH
+        self.hs = HTTPRequestHandlerWFM.HS
         BaseHTTPRequestHandler.__init__(self, *args, **kwargs)
 
     def do_GET(self):
         """Serve a GET request."""
-        logging.debug("current thread: %s" % threading.current_thread())
+        logging.debug(">>>> current thread: %s" % threading.current_thread())
         f = self.send_head()
         if f:
             try:
@@ -279,39 +302,31 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
                 filename = form.getvalue("filename")
                 if filename is None:
                     return (False, "no file specified")
+                filename = urllib.unquote(filename).decode("utf-8")
                 work_path = HTTPRequestHandlerWFM.WORK_PATH
-                logging.debug("work path: %s" % work_path)
                 if os.path.isdir(work_path):
-                    if work_path.endswith('/'):
-                        fullname = os.path.join(work_path, filename)
-                        try:
-                            logging.warn("deleting file %s" % fullname)
-                            os.remove(fullname)
-                            self.fih.del_info(fullname)
-                            return (True, "file %s deleted" % fullname)
-                        except OSError, e:
-                            return (False, str(e))
+                    fullname = os.path.join(work_path, filename)
+                    try:
+                        os.remove(fullname)
+                        self.fih.del_info(fullname)
+                        logging.warn("deleting file %s" % fullname.encode(ENC))
+                        return (True,
+                                "file %s deleted" % fullname)
+                    except OSError, e:
+                        return (False, str(e).decode("string_escape"))
             else:
-                return self.deal_post_data()
+                return self.deal_post_file()
 
         res, msg = parse_post_data()
-        logging.debug(
-            "POST %s, %s, by: %s" % (res, msg, self.client_address)
-        )
+        logging.info("==== POST %s, %s, by: %s"
+                     % (res, msg, self.client_address))
         f = StringIO()
-        f.write('<!DOCTYPE html>')
-        f.write("<html>\n<title>Result Page</title>\n")
-        f.write('<head>\n<meta charset="%s">\n<style>\n%s\n</style></head>\n'
-                % (ENCODING, HTML_CSS))
-        f.write('<body>\n<h2>Result:</h2>\n')
-        f.write('<hr>\n')
-        if res:
-            f.write('<strong>Success: </strong>')
-        else:
-            f.write('<strong>Failed: </strong>')
-        f.write(msg)
-        f.write('<hr><br><a href="%s">Go Back</a>' % self.headers["Referer"])
-        f.write('</body>\n</html>\n')
+        postpage = self.hs.gen_postpage(
+            result=str(res),
+            msg=msg,
+            refer=self.headers["Referer"]
+        )
+        f.write(postpage)
         length = f.tell()
         f.seek(0)
         self.send_response(200)
@@ -322,7 +337,7 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
             self.copyfile(f, self.wfile)
             f.close()
 
-    def deal_post_data(self):
+    def deal_post_file(self):
         self.is_upload = True
         try:
             boundary = self.headers.plisttext.split("=")[1]
@@ -330,7 +345,7 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
             self.is_upload = False
 
         if self.is_upload:
-            remainbytes = int(self.headers["Content-Length"])
+            content_length = remainbytes = int(self.headers["Content-Length"])
             line = self.rfile.readline()
             remainbytes -= len(line)
             if boundary not in line:
@@ -344,7 +359,7 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
             if not fn:
                 return (False, "can't find out the file name")
             path = self.translate_path(self.path)
-            fn = os.path.join(path, fn[0])
+            fn = os.path.join(path, fn[0].decode("utf-8"))
             while os.path.exists(fn):
                 fn += "_"
             line = self.rfile.readline()
@@ -353,6 +368,9 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
             remainbytes -= len(line)
             try:
                 out = open(fn, 'wb')
+                logging.info("==== POST File: %s, Content-Length: %d"
+                             % (fn.encode(ENC), content_length))
+                logging.info("---- writing to file: %s" % fn)
             except IOError, e:
                 return (False, "can't create file: %s" % str(e))
 
@@ -404,14 +422,15 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
             else:
                 HTTPRequestHandlerWFM.WORK_PATH = path
                 return self.list_directory(path)
-        ctype = self.guess_type(path)
+        ctype = "%s; charset=%s" % (self.guess_type(path), CHARSET)
         try:
             # Always read in binary mode. Opening files in text mode may cause
             # newline translations, making the actual size of the content
             # transmitted *less* than the content-length!
             f = open(path, 'rb')
-        except IOError:
-            self.send_error(404, "File not found")
+            logging.info("==== GET File: %s" % path.encode(ENC))
+        except IOError, e:
+            self.send_error(404, str(e))
             return None
         try:
             self.send_response(200)
@@ -437,42 +456,17 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
 
         """
         try:
-            list = os.listdir(path)
+            files = os.listdir(path)
+            list = map(lambda s:
+                       (s if isinstance(s, unicode) else s.decode(ENC)), files)
+            logging.info("==== GET Directory: %s" % path.encode(ENC))
         except os.error:
             self.send_error(403, "No permission to list directory")
             return None
         list.sort(key=lambda a: a.lower())
-        html_style = HTMLStyle()
         f = StringIO()
         displaypath = cgi.escape(urllib.unquote(self.path))
-        f.write('<!DOCTYPE html>')
-        f.write("<html>\n<title>Directory listing for %s</title>\n"
-                % displaypath)
-        f.write('<head>\n<meta charset="%s">\n<style>\n%s\n</style>\n</head>\n'
-                % (ENCODING, HTML_CSS))
-        f.write("<body>\n<h2>Directory listing for %s</h2>\n" % displaypath)
-        upload_form = """
-        <div>
-          <hr>
-          <form enctype="multipart/form-data" method="post">
-            Upload File: <input name="file" type="file"/>
-            <input type="submit" value="Upload"/>
-          </form>
-          <hr>
-        </div>
-        """
-        f.write(upload_form)
-        post_form = """
-        <div>
-          <form action="/delete" method="post">
-            Delete File: <input type="text" name="filename">
-            <input type="submit" value="Submit">
-          </form>
-          <hr>
-        </div>
-        """
-        f.write(post_form)
-        f.write("<div>\n<table>%s" % html_style.table_head)
+        f.write(self.hs.gen_getpage(directory=displaypath))
         for name in list:
             fullname = os.path.join(path, name)
             displayname = linkname = name
@@ -485,20 +479,15 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
             if os.path.islink(fullname):
                 displayname = name + "@"
                 # Note: a link to a directory displays with @ and links with /
-            f.write(html_style.gen_table_body(
-                linkname=urllib.quote(linkname),
-                displayname=cgi.escape(displayname),
+            f.write(self.hs.gen_table_body(
+                linkname=urllib.quote(linkname.encode("utf-8")),
+                displayname=cgi.escape(displayname.encode("utf-8")),
                 **info
-                )
-            )
-        f.write("</table></div>\n</body>\n</html>\n")
+            ))
+        f.write("\n".join(["</table>", "</div>", "</body>", "</html>"]))
         length = f.tell()
         f.seek(0)
         self.send_response(200)
-        self.send_header(
-            "Content-type",
-            "text/html; charset=%s" % ENCODING
-        )
         self.send_header("Content-Length", str(length))
         self.end_headers()
         if self.fih.need_flush():
@@ -518,7 +507,7 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
         path = path.split('#', 1)[0]
         # Don't forget explicit trailing slash when normalizing. Issue17324
         trailing_slash = path.rstrip().endswith('/')
-        path = posixpath.normpath(urllib.unquote(path))
+        path = posixpath.normpath(urllib.unquote(path).decode("utf-8"))
         words = path.split('/')
         words = filter(None, words)
         path = os.getcwd()
