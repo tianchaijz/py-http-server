@@ -8,7 +8,7 @@ upload and delete file features.
 
 """
 
-__version__ = "0.1"
+__version__ = "0.2"
 __all__ = ["HTTPRequestHandlerWFM"]
 __author__ = "Jinzheng Zhang"
 __email__ = "tianchaijz@gmail.com"
