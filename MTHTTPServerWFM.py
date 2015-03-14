@@ -8,7 +8,7 @@ upload and delete file features.
 
 """
 
-__version__ = "0.2"
+__version__ = "0.3"
 __all__ = ["HTTPRequestHandlerWFM"]
 __author__ = "Jinzheng Zhang"
 __email__ = "tianchaijz@gmail.com"
@@ -81,7 +81,7 @@ tbody td { height:1.2em; text-align:right; }
   </head>
 <body>
   <div>
-    <h3><a href="/">Home</a> &nbsp Directory listing for {directory}</h3>
+    <h3><a href="/">Home</a> &nbsp; Directory listing for {directory}</h3>
   </div>
   <div>
     <hr color="#DDEEDD">
@@ -194,7 +194,7 @@ class FileInfoHandler(object):
             return hasher.hexdigest()
 
         try:
-            logging.info("++++ add file info: %s" % file)
+            logging.debug("++++ add file info: %s" % file)
             size = str(os.path.getsize(file))
             mtime = str(os.path.getmtime(file))
             with open(file, 'rb') as fd:
@@ -216,7 +216,7 @@ class FileInfoHandler(object):
         if file_info:
             file_mtime = os.path.getmtime(file)
             if str(file_mtime) != file_info["mtime"]:
-                logging.info("++-- update file info - %s" % file)
+                logging.debug("++-- update file info - %s" % file)
                 self.add_info(file)
             return file_info
         else:
