@@ -46,9 +46,10 @@ CHARSET = ENC_MAP.get(ENC, "utf-8")
 reload(sys)
 sys.setdefaultencoding("utf-8")
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 FILE_NAME = os.path.basename(str(__file__)).split('.')[0]
+WORK_PATH = sys.argv[2] if sys.argv[2:] else os.getcwd()
 # ====================================================================
 
 
@@ -61,10 +62,10 @@ h2 { margin:.8em 0 .3em; }
 h3 { margin:.5em 0 .3em; }
 
 table { font-size:.8em; border-collapse:collapse;
-border-bottom:1px #DED solid; width:100%; margin:.5em 0; }
+border-bottom:1px solid #DDEEDD; width:100%; margin:.5em 0; }
 
-thead th { font-size:1em; background:#DED;
-border:.2em solid #FFF; padding:.1em .3em; }
+thead th { font-size:1em; background:#DDEEDD;
+border:.2em solid #FFFFFF; padding:.1em .3em; }
 
 tbody tr.odd { background:#F5F5F5; }
 tbody th { text-align:left; }
@@ -79,23 +80,25 @@ tbody td { height:1.2em; text-align:right; }
     <style>{css}</style>
   </head>
 <body>
-  <h2>Directory listing for {directory}</h2>
   <div>
-    <hr>
+    <h3><a href="/">Home</a> &nbsp Directory listing for {directory}</h3>
+  </div>
+  <div>
+    <hr color="#DDEEDD">
     <form enctype="multipart/form-data" method="post">
       Upload File: <input name="file" type="file"/>
       <input type="submit" value="Upload"/>
     </form>
-    <hr>
   </div>
   <div>
+    <hr color="#DDEEDD">
     <form action="/delete" method="post">
       Delete File: <input type="text" name="filename">
       <input type="submit" value="Submit">
     </form>
-    <hr>
   </div>
   <div>
+    <hr color="#DDEEDD">
     <table>
       <thead>
         <tr> <th rowspan="2">NAME</th> <th colspan="2">INFO</th> </tr>
@@ -107,11 +110,11 @@ tbody td { height:1.2em; text-align:right; }
   <html>
   <head> <meta charset="utf-8"/> <title>Result Page</title> </head>
   <body>
-    <h2>Result:</h2>
-    <hr>
+    <h3>Result:</h3>
+    <hr color="#DDEEDD">
     <strong>{result}: </strong>
     {msg}
-    <hr><br><a href="{refer}">Go Back</a>
+    <hr color="#DDEEDD"><br><a href="{refer}">Go Back</a>
   <body>
 </html>
 """
@@ -148,20 +151,39 @@ class FileInfoHandler(object):
     FILE_LOCK = threading.Lock()
 
     def __init__(self):
-        self.info_file = "__%s.json" % FILE_NAME
+        self.info_file = os.path.join(WORK_PATH, "__%s.json" % FILE_NAME)
         self.lock = threading.Lock()
+        self.info, self.oldinfo = {}, {}
+        threading.Thread(
+            target=self._load_info,
+            name="Thread: Load File Info",
+        ).start()
+
+    def _load_info(self):
+        info = None
         try:
             FileInfoHandler.FILE_LOCK.acquire()
             with open(self.info_file, 'rb') as fd:
-                self.info = json.load(fd, encoding=ENC)
+                info = json.load(fd, encoding=ENC)
         except Exception, e:
             logging.exception(str(e))
         finally:
             FileInfoHandler.FILE_LOCK.release()
-            if not hasattr(self, "info"):
-                self.info = {}
+            if info:
+                logging.info("==== Load File Info Success ====")
+                self.info, self.oldinfo = info, deepcopy(info)
+            else:
                 self.flush_info()
-        self.oldinfo = deepcopy(self.info)
+
+    def _do_flush(self):
+        try:
+            FileInfoHandler.FILE_LOCK.acquire()
+            with open(self.info_file, 'wb') as fd:
+                json.dump(self.info, fd, encoding=ENC)
+        except Exception, e:
+            logging.exception(str(e))
+        finally:
+            FileInfoHandler.FILE_LOCK.release()
 
     def _gen_info(self, file):
         def hashfile(fd, hasher, blocksize=65536):
@@ -172,6 +194,7 @@ class FileInfoHandler(object):
             return hasher.hexdigest()
 
         try:
+            logging.info("++++ add file info: %s" % file)
             size = str(os.path.getsize(file))
             mtime = str(os.path.getmtime(file))
             with open(file, 'rb') as fd:
@@ -182,18 +205,18 @@ class FileInfoHandler(object):
                 "size": size,
                 "mtime": mtime
             }
+            self._do_flush()
         except IOError, e:
             logging.exception("!!!! %s: %s" % (file, str(e)))
         finally:
             self.lock.release()
-        self.flush_info()
 
     def get_info(self, file):
         file_info = self.info.get(file, False)
         if file_info:
             file_mtime = os.path.getmtime(file)
             if str(file_mtime) != file_info["mtime"]:
-                logging.info("---- update file info - %s" % file)
+                logging.info("++-- update file info - %s" % file)
                 self.add_info(file)
             return file_info
         else:
@@ -205,36 +228,28 @@ class FileInfoHandler(object):
         try:
             self.lock.acquire()
             del self.info[file]
-            logging.info("---- delete file info - %s" % file)
+            logging.info("#### delete file info - %s" % file)
+            self._do_flush()
         except KeyError:
             logging.exception("!!!! %s not found" % file)
         except ValueError, e:
             logging.exception(str(e))
         finally:
             self.lock.release()
-        self.flush_info()
 
     def add_info(self, file):
-        if os.path.isfile(file):
-            thread = threading.Thread(
-                target=self._gen_info,
-                args=(file,),
-                name="Thread-" + file,
-            )
-            thread.daemon = True
-            thread.start()
+        thread = threading.Thread(
+            target=self._gen_info,
+            args=(file,),
+            name="Thread - " + file,
+        )
+        thread.daemon = True
+        thread.start()
 
     def flush_info(self):
-        try:
-            FileInfoHandler.FILE_LOCK.acquire()
-            self.lock.acquire()
-            with open(self.info_file, 'wb') as fd:
-                json.dump(self.info, fd, encoding=ENC)
-        except Exception, e:
-            logging.exception(str(e))
-        finally:
-            self.lock.release()
-            FileInfoHandler.FILE_LOCK.release()
+        self.lock.acquire()
+        self._do_flush()
+        self.lock.release()
 
     def need_flush(self):
         info_diff = set(self.info) - set(self.oldinfo)
@@ -261,7 +276,7 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
 
     server_version = "MHTTPServerWFM/" + __version__
 
-    WORK_PATH = os.getcwd()
+    CWD = WORK_PATH
     FIH = FileInfoHandler()
     HS = HTMLStyle()
 
@@ -273,7 +288,7 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
 
     def do_GET(self):
         """Serve a GET request."""
-        logging.debug(">>>> current thread: %s" % threading.current_thread())
+        logging.info(">>>> Current Thread: %s" % threading.current_thread())
         f = self.send_head()
         if f:
             try:
@@ -303,17 +318,15 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
                 if filename is None:
                     return (False, "no file specified")
                 filename = urllib.unquote(filename).decode("utf-8")
-                work_path = HTTPRequestHandlerWFM.WORK_PATH
-                if os.path.isdir(work_path):
-                    fullname = os.path.join(work_path, filename)
-                    try:
-                        os.remove(fullname)
-                        self.fih.del_info(fullname)
-                        logging.warn("deleting file %s" % fullname.encode(ENC))
-                        return (True,
-                                "file %s deleted" % fullname)
-                    except OSError, e:
-                        return (False, str(e).decode("string_escape"))
+                fullname = os.path.join(HTTPRequestHandlerWFM.CWD, filename)
+                try:
+                    os.remove(fullname)
+                    logging.warn("#### deleting file %s" %
+                                 fullname.encode(ENC))
+                    self.fih.del_info(fullname)
+                    return (True, "file %s deleted" % fullname)
+                except OSError, e:
+                    return (False, str(e).decode("string_escape"))
             else:
                 return self.deal_post_file()
 
@@ -370,7 +383,7 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
                 out = open(fn, 'wb')
                 logging.info("==== POST File: %s, Content-Length: %d"
                              % (fn.encode(ENC), content_length))
-                logging.info("---- writing to file: %s" % fn)
+                logging.info("++++ writing to file: %s" % fn)
             except IOError, e:
                 return (False, "can't create file: %s" % str(e))
 
@@ -420,7 +433,7 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
                     path = index
                     break
             else:
-                HTTPRequestHandlerWFM.WORK_PATH = path
+                HTTPRequestHandlerWFM.CWD = path
                 return self.list_directory(path)
         ctype = "%s; charset=%s" % (self.guess_type(path), CHARSET)
         try:
@@ -596,7 +609,7 @@ def main():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
-        print("IP Address", s.getsockname()[0])
+        print("IP Address", s.getsockname()[0], "PID", os.getpid())
         s.close()
     except:
         pass

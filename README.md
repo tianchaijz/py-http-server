@@ -1,5 +1,5 @@
-MHTTPServerWFM
-==============
+MTHTTPServerWFM
+===============
 
 A Python multithreading HTTP server extended from the standard
 `SimpleHTTPServer` module with which you can upload and delete files and it can
@@ -13,5 +13,5 @@ running at \*nix or Windows platforms.
 
 ## USAGE
 ```
-python MHTTPServerWFM.py [port] [path]
+python MTHTTPServerWFM.py [port] [path]
 ```
