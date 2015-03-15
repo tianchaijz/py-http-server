@@ -139,11 +139,7 @@ tbody td { height:1.2em; text-align:right; }
 
     def gen_table_body(self, **kwargs):
         self.count = 1 - self.count
-        if self.count > 0:
-            tr_class = '<tr class="odd">'
-        else:
-            tr_class = '<tr>'
-        kwargs["tr_class"] = tr_class
+        kwargs["tr_class"] = '<tr class="odd">' if self.count > 0 else '<tr>'
         return HTMLStyle.TBODY.format(**kwargs)
 
 
@@ -155,35 +151,28 @@ class FileInfoHandler(object):
         self.lock = threading.Lock()
         self.info, self.oldinfo = {}, {}
         threading.Thread(
-            target=self._load_info,
-            name="Thread: Load File Info",
+            target=self._load_info, name="Thread: Load File Info",
         ).start()
 
     def _load_info(self):
-        info = None
         try:
-            FileInfoHandler.FILE_LOCK.acquire()
-            with open(self.info_file, 'rb') as fd:
-                info = json.load(fd, encoding=ENC)
+            with FileInfoHandler.FILE_LOCK:
+                with open(self.info_file, 'rb') as fd:
+                    info = json.load(fd, encoding=ENC)
         except Exception, e:
             logging.exception(str(e))
-        finally:
-            FileInfoHandler.FILE_LOCK.release()
-            if info:
-                logging.info("==== Load File Info Success ====")
-                self.info, self.oldinfo = info, deepcopy(info)
-            else:
-                self.flush_info()
+            self.flush_info()
+        else:
+            logging.info("==== Load File Info Success ====")
+            self.info, self.oldinfo = info, deepcopy(info)
 
     def _do_flush(self):
-        try:
-            FileInfoHandler.FILE_LOCK.acquire()
-            with open(self.info_file, 'wb') as fd:
-                json.dump(self.info, fd, encoding=ENC)
-        except Exception, e:
-            logging.exception(str(e))
-        finally:
-            FileInfoHandler.FILE_LOCK.release()
+        with FileInfoHandler.FILE_LOCK:
+            try:
+                with open(self.info_file, 'wb') as fd:
+                    json.dump(self.info, fd, encoding=ENC)
+            except Exception, e:
+                logging.exception(str(e))
 
     def _gen_info(self, file):
         def hashfile(fd, hasher, blocksize=65536):
@@ -199,17 +188,13 @@ class FileInfoHandler(object):
             mtime = str(os.path.getmtime(file))
             with open(file, 'rb') as fd:
                 sha1sum = hashfile(fd, hashlib.sha1())
-            self.lock.acquire()
-            self.info[file] = {
-                "sha1sum": sha1sum,
-                "size": size,
-                "mtime": mtime
-            }
-            self._do_flush()
+            with self.lock:
+                self.info[file] = {
+                    "sha1sum": sha1sum, "size": size, "mtime": mtime
+                }
+                self._do_flush()
         except IOError, e:
             logging.exception("!!!! %s: %s" % (file, str(e)))
-        finally:
-            self.lock.release()
 
     def get_info(self, file):
         file_info = self.info.get(file, False)
@@ -225,17 +210,15 @@ class FileInfoHandler(object):
             return self.dummy_info()
 
     def del_info(self, file):
-        try:
-            self.lock.acquire()
-            del self.info[file]
-            logging.info("#### delete file info - %s" % file)
-            self._do_flush()
-        except KeyError:
-            logging.exception("!!!! %s not found" % file)
-        except ValueError, e:
-            logging.exception(str(e))
-        finally:
-            self.lock.release()
+        with self.lock:
+            try:
+                del self.info[file]
+                logging.info("#### delete file info - %s" % file)
+                self._do_flush()
+            except KeyError:
+                logging.exception("!!!! %s not found" % file)
+            except ValueError, e:
+                logging.exception(str(e))
 
     def add_info(self, file):
         thread = threading.Thread(
@@ -247,15 +230,11 @@ class FileInfoHandler(object):
         thread.start()
 
     def flush_info(self):
-        self.lock.acquire()
-        self._do_flush()
-        self.lock.release()
+        with self.lock:
+            self._do_flush()
 
     def need_flush(self):
-        info_diff = set(self.info) - set(self.oldinfo)
-        if info_diff:
-            return True
-        return False
+        return bool(set(self.info) - set(self.oldinfo))
 
     def dummy_info(self):
         return {"size": '', "sha1sum": ''}
@@ -335,9 +314,7 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
                      % (res, msg, self.client_address))
         f = StringIO()
         postpage = self.hs.gen_postpage(
-            result=str(res),
-            msg=msg,
-            refer=self.headers["Referer"]
+            result=str(res), msg=msg, refer=self.headers["Referer"]
         )
         f.write(postpage)
         length = f.tell()
@@ -451,9 +428,7 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
             fs = os.fstat(f.fileno())
             self.send_header("Content-Length", str(fs[6]))
             self.send_header(
-                "Last-Modified",
-                self.date_time_string(fs.st_mtime)
-            )
+                "Last-Modified", self.date_time_string(fs.st_mtime))
             self.end_headers()
             return f
         except:
