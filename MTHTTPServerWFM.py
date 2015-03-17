@@ -48,7 +48,7 @@ sys.setdefaultencoding("utf-8")
 
 logging.basicConfig(level=logging.INFO)
 
-FILE_NAME = os.path.basename(str(__file__)).split('.')[0]
+FILE_NAME = os.path.basename(__file__).split('.')[0]
 WORK_PATH = sys.argv[2] if sys.argv[2:] else os.getcwd()
 # ====================================================================
 
@@ -253,7 +253,7 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
 
     """
 
-    server_version = "MHTTPServerWFM/" + __version__
+    server_version = "%s/%s" % (FILE_NAME, __version__)
 
     CWD = WORK_PATH
     FIH = FileInfoHandler()
