@@ -46,7 +46,11 @@ CHARSET = ENC_MAP.get(ENC, "utf-8")
 reload(sys)
 sys.setdefaultencoding("utf-8")
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s] - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 FILE_NAME = os.path.basename(__file__).split('.')[0]
 WORK_PATH = sys.argv[2] if sys.argv[2:] else os.getcwd()
@@ -159,11 +163,13 @@ class FileInfoHandler(object):
             with FileInfoHandler.FILE_LOCK:
                 with open(self.info_file, 'rb') as fd:
                     info = json.load(fd, encoding=ENC)
+        except IOError, e:
+            pass
         except Exception, e:
             logging.exception(str(e))
             self.flush_info()
         else:
-            logging.info("==== Load File Info Success ====")
+            logging.info("Load file info success")
             self.info, self.oldinfo = info, deepcopy(info)
 
     def _do_flush(self):
@@ -171,6 +177,8 @@ class FileInfoHandler(object):
             try:
                 with open(self.info_file, 'wb') as fd:
                     json.dump(self.info, fd, encoding=ENC)
+            except IOError:
+                    pass
             except Exception, e:
                 logging.exception(str(e))
 
@@ -183,7 +191,7 @@ class FileInfoHandler(object):
             return hasher.hexdigest()
 
         try:
-            logging.debug("++++ add file info: %s" % file)
+            logging.debug("Add file info: %s" % file)
             size = str(os.path.getsize(file))
             mtime = str(os.path.getmtime(file))
             with open(file, 'rb') as fd:
@@ -194,14 +202,14 @@ class FileInfoHandler(object):
                 }
                 self._do_flush()
         except IOError, e:
-            logging.exception("!!!! %s: %s" % (file, str(e)))
+            logging.exception("%s: %s" % (file, str(e)))
 
     def get_info(self, file):
         file_info = self.info.get(file, False)
         if file_info:
             file_mtime = os.path.getmtime(file)
             if str(file_mtime) != file_info["mtime"]:
-                logging.debug("++-- update file info - %s" % file)
+                logging.debug("Update file info: %s" % file)
                 self.add_info(file)
             return file_info
         else:
@@ -213,10 +221,10 @@ class FileInfoHandler(object):
         with self.lock:
             try:
                 del self.info[file]
-                logging.info("#### delete file info - %s" % file)
+                logging.info("Delete file info: %s" % file)
                 self._do_flush()
             except KeyError:
-                logging.exception("!!!! %s not found" % file)
+                logging.exception("%s not found" % file)
             except ValueError, e:
                 logging.exception(str(e))
 
@@ -260,14 +268,14 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
     HS = HTMLStyle()
 
     def __init__(self, *args, **kwargs):
-        logging.debug(">>>> __init__ %s" % (self.__class__.__name__))
+        logging.debug("__init__ %s" % (self.__class__.__name__))
         self.fih = HTTPRequestHandlerWFM.FIH
         self.hs = HTTPRequestHandlerWFM.HS
         BaseHTTPRequestHandler.__init__(self, *args, **kwargs)
 
     def do_GET(self):
         """Serve a GET request."""
-        logging.info(">>>> Current Thread: %s" % threading.current_thread())
+        logging.debug("Current thread: %s" % threading.current_thread())
         f = self.send_head()
         if f:
             try:
@@ -300,17 +308,18 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
                 fullname = os.path.join(HTTPRequestHandlerWFM.CWD, filename)
                 try:
                     os.remove(fullname)
-                    logging.warn("#### deleting file %s" %
-                                 fullname.encode(ENC))
+                    logging.warn("Delete file: %s" %
+                                 self.real_path(fullname.encode(ENC)))
                     self.fih.del_info(fullname)
-                    return (True, "file %s deleted" % fullname)
+                    return (True, "file: %s deleted" %
+                            self.real_path(fullname))
                 except OSError, e:
                     return (False, str(e).decode("string_escape"))
             else:
                 return self.deal_post_file()
 
         res, msg = parse_post_data()
-        logging.info("==== POST %s, %s, by: %s"
+        logging.info("Post %s, %s by %s"
                      % (res, msg, self.client_address))
         f = StringIO()
         postpage = self.hs.gen_postpage(
@@ -358,11 +367,12 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
             remainbytes -= len(line)
             try:
                 out = open(fn, 'wb')
-                logging.info("==== POST File: %s, Content-Length: %d"
-                             % (fn.encode(ENC), content_length))
-                logging.info("++++ writing to file: %s" % fn)
+                logging.info("Post file: %s, Content-Length: %d" %
+                             (self.real_path(fn.encode(ENC)), content_length))
+                logging.info("Write to file: %s" %
+                             self.real_path(fn.encode(ENC)))
             except IOError, e:
-                return (False, "can't create file: %s" % str(e))
+                return (False, "can't write file: %s" % str(e))
 
             preline = self.rfile.readline()
             remainbytes -= len(preline)
@@ -418,7 +428,7 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
             # newline translations, making the actual size of the content
             # transmitted *less* than the content-length!
             f = open(path, 'rb')
-            logging.info("==== GET File: %s" % path.encode(ENC))
+            logging.info("Get file: %s" % self.real_path(path.encode(ENC)))
         except IOError, e:
             self.send_error(404, str(e))
             return None
@@ -435,6 +445,9 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
             f.close()
             raise
 
+    def real_path(self, path):
+        return os.path.relpath(path, HTTPRequestHandlerWFM.CWD)
+
     def list_directory(self, path):
         """Helper to produce a directory listing (absent index.html).
 
@@ -447,7 +460,8 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
             files = os.listdir(path)
             list = map(lambda s:
                        (s if isinstance(s, unicode) else s.decode(ENC)), files)
-            logging.info("==== GET Directory: %s" % path.encode(ENC))
+            logging.info("Get directory: %s" %
+                         self.real_path(path.encode(ENC)))
         except os.error:
             self.send_error(403, "No permission to list directory")
             return None
@@ -563,6 +577,9 @@ class HTTPRequestHandlerWFM(BaseHTTPRequestHandler):
         '.json': 'application/json',
     })
 
+    def log_request(self, code='-'):
+        sys.stdout.write("Status: %s\n" % str(code))
+
 
 class MultiThreadingServer(ThreadingMixIn, HTTPServer):
     pass
@@ -584,16 +601,18 @@ def main():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
-        print("IP Address", s.getsockname()[0], "PID", os.getpid())
+        logging.info("IP address: %s, pid: %d" %
+                     (s.getsockname()[0], os.getpid()))
         s.close()
     except:
         pass
 
-    print "Serving HTTP on", sa[0], "port", sa[1], "..."
+    logging.info("Serving HTTP on: %s, port: %d" % (sa[0], sa[1]))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("Serving Finished.")
+        print
+        logging.info("Serving Finished")
 
 if __name__ == '__main__':
     main()
